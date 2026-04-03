@@ -1,12 +1,12 @@
-# Transaction Fraud Detection Model
+# sample transaction fraud detection model
 
-End-to-end fraud detection system for banking transaction data — covering feature engineering with behavioral biometrics and device profiling, XGBoost model development, KPI reporting, and SHAP explainability.
+i built this to show how i think about fraud detection end to end — not just the model, but the feature engineering, the SQL monitoring layer, the KPI framework, and how everything connects in a real production environment. this covers behavioral biometrics, device profiling, XGBoost with Optuna tuning, SHAP explainability, and Snowflake-ready SQL scripts.
 
 ---
 
-## Overview
+## what it does
 
-This repository demonstrates a complete fraud model development and evaluation workflow aligned with financial services best practices. It reflects the processes used by fraud risk analytics teams working with platforms like **Actimize**, **LexisNexis Risk Solutions**, and behavioral intelligence providers.
+this is a full fraud detection workflow modeled after how fraud risk analytics teams actually operate at scale — working with platforms like Actimize, LexisNexis Risk Solutions, and behavioral intelligence tools like BioCatch.
 
 | Metric | Value |
 |--------|-------|
@@ -20,7 +20,7 @@ This repository demonstrates a complete fraud model development and evaluation w
 
 ---
 
-## Repository Structure
+## repo structure
 
 ```
 fraud-detection-model/
@@ -51,72 +51,59 @@ fraud-detection-model/
 
 ---
 
-## Feature Engineering
+## feature engineering
 
-Features are grouped into five categories reflecting real production data pipelines:
+i grouped everything into five categories based on how production fraud pipelines actually feed data into models.
 
-### Core Transaction Features
-- Transaction amount, amount-to-credit-limit ratio
-- Channel (in-store, online, mobile, ATM, phone)
-- Merchant category code (MCC)
-- Account age and prior dispute history
+### core transaction features
+transaction amount, amount-to-credit-limit ratio, channel (in-store, online, mobile, ATM, phone), merchant category code, account age, and prior dispute history.
 
-### Time Features
-- Cyclical hour encoding (sin/cos) to handle 23h→0h boundary
-- Night transaction flag, weekend flag, holiday season flag
+### time features
+cyclical hour encoding using sin/cos so the model doesn’t think 11pm and midnight are far apart. night transaction flag, weekend flag, holiday season flag.
 
-### Velocity Signals
-- Transaction count and dollar sum: 1h, 6h, 24h, 7-day windows
-- Distinct merchant count and country count (24h)
-- Velocity acceleration ratios (1h/24h surge detection)
-- Amount z-score vs. 30-day account baseline
+### velo signals
+this is where a lot of the detection power comes from. transaction count and dollar sum across 1h, 6h, 24h, and 7-day windows. distinct merchant and country counts over 24h. velocity acceleration ratios for catching 1h/24h surge patterns. amount z-score against the customer’s own 30-day baseline.
 
-### Behavioral Biometrics *(BioCatch integration)*
-- Session duration, typing speed (WPM), mouse linearity score
-- Copy-paste event detection, login attempt count
-- Engineered: `bot_signal` (short session + copy-paste)
-- Engineered: `login_stress_score`
+### behavioral biometrics *(BioCatch integration)*
+session duration, typing speed, mouse linearity, copy-paste detection, login attempt counts. i also engineered a bot_signal feature (short session + copy-paste behavior) and a login_stress_score to flag unusual session patterns.
 
-### Device Profiling *(LexisNexis ThreatMetrix integration)*
-- Device age (days since first seen), known device flag
-- IP risk score (0–100), VPN/proxy detected, Tor exit node flag
-- Geographic IP mismatch (billing country ≠ IP country)
-- Engineered: `new_device_high_ip_risk` (new device + high IP risk)
-- Engineered: `cnp_with_anonymizer` (card-not-present + VPN)
-- LexisNexis composite risk score (identity + network + velocity risk)
+### device profiling *(LexisNexis ThreatMetrix integration)*
+device age, known device flag, IP risk score, VPN/proxy/Tor detection, and geographic mismatch between billing country and IP country. engineered features include new_device_high_ip_risk and cnp_with_anonymizer (card-not-present + VPN). also incorporated a LexisNexis-style composite risk score combining identity, network, and velocity risk signals.
 
 ---
 
-## SQL Scripts
+## SQL scripts
 
-The SQL scripts are written for **Snowflake** (compatible with Redshift and SQL Server with minor dialect changes). They reflect the kinds of queries used for model KPI monitoring in Actimize or similar fraud platforms.
+all written for Snowflake but easy to adapt for Redshift or SQL Server. these reflect the kind of queries you’d actually use for model monitoring in Actimize or a similar platform.
 
 | Script | Purpose |
 |--------|---------|
-| `01_feature_extraction.sql` | Full feature extraction pipeline using CTEs across 7 data sources |
+| `01_feature_extraction.sql` | full feature extraction pipeline using CTEs across 7 data sources |
 | `02_velocity_checks.sql` | 6 real-time velocity fraud rules (card testing, impossible travel, spend spike) |
-| `03_model_kpi_report.sql` | Monthly KPI report: confusion matrix by score band, MoM trend, PSI drift |
+| `03_model_kpi_report.sql` | monthly KPI report: confusion matrix by score band, MoM trend, PSI drift |
 | `04_false_positive_analysis.sql` | FP profiling by MCC, account age, threshold sensitivity at 9 cutoffs |
 
 ---
 
-## Model Development
+## model development
 
-### Baseline: Logistic Regression
-Provides interpretable coefficients for stakeholder communication and model logic review.
+### baseline: logistic regression
+started here because you need something interpretable to explain to stakeholders and validate that the feature set makes sense before going more complex.
 
-### Primary: XGBoost with Optuna Tuning
-- **Imbalance handling:** `scale_pos_weight` (~38.5x for 2.5% fraud rate)
-- **Optimization target:** PR-AUC (more appropriate than ROC-AUC for imbalanced fraud data)
-- **Hyperparameter search:** Optuna TPE sampler, 50 trials, 5-fold stratified CV
-- **Validation approach:** Time-based train/test split (no random shuffle) to prevent data leakage
+### primary: XGBoost with Optuna Tuning
+	∙	imbalance handling with scale_pos_weight (~38.5x for a 2.5% fraud rate)
+	∙	optimized on PR-AUC instead of ROC-AUC (more on that below)
+	∙	50-trial Optuna search using TPE sampler with 5-fold stratified CV
+	∙	time-based train/test split — no random shuffle, because in production you’re always scoring future transactions
 
-### Why PR-AUC over ROC-AUC?
-With a 2.5% fraud rate, a model predicting all transactions as legitimate achieves ROC-AUC ≈ 0.50 but PR-AUC ≈ 0.025. PR-AUC better reflects performance on the minority fraud class and is more meaningful for operational decision-making.
+### why PR-AUC over ROC-AUC?
+with a 2.5% fraud rate, a model that just predicts everything as legit still gets a ROC-AUC around 0.50. PR-AUC starts at 0.025 for that same dummy model, so it actually punishes you for missing fraud. it’s a better measure of how the model performs on the thing you care about — catching fraud without drowning analysts in false positives.
 
 ---
 
-## KPI Framework
+## kpi framework
+
+these are the metrics i track to evaluate whether a model is actually production-ready, not just academically interesting.
 
 | KPI | Definition | Target |
 |-----|-----------|--------|
@@ -129,34 +116,27 @@ With a 2.5% fraud rate, a model predicting all transactions as legitimate achiev
 
 ---
 
-## Setup & Usage
+## this how you run it
 
-### Prerequisites
+### install dependecies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 1. Generate Synthetic Data
+### 1. generate the data
 ```bash
 cd data
 python generate_synthetic_data.py
 # Output: transactions.csv (100,000 rows)
 ```
 
-### 2. Run the Full Analysis
-Open and run `notebooks/fraud_detection_analysis.ipynb` in Jupyter.
+### 2. run the notebook
+open and run `notebooks/fraud_detection_analysis.ipynb` in Jupyter.
 
-The notebook covers:
-1. Data quality checks
-2. Exploratory data analysis
-3. Feature engineering
-4. Model training (LR baseline + XGBoost)
-5. KPI reporting and confusion matrix
-6. Threshold sensitivity analysis
-7. SHAP explainability (summary, bar, waterfall)
-8. Business impact quantification
+notebook covers:
+open notebooks/fraud_detection_analysis.ipynb in Jupyter. it walks through everything: data quality checks, EDA, feature engineering, model training (LR + XGBoost), KPI reporting, threshold analysis, SHAP explainability, and business impact.
 
-### 3. Train Models via CLI
+### 3. train from the command line
 ```bash
 cd src
 python model_training.py --data-path ../data/transactions.csv --n-trials 50 --threshold 0.50
@@ -164,38 +144,32 @@ python model_training.py --data-path ../data/transactions.csv --n-trials 50 --th
 
 ---
 
-## Model Validation
+## model validation
 
-See [`reports/model_validation_report.md`](reports/model_validation_report.md) for the complete model validation documentation, including:
-- Feature importance rankings (SHAP)
-- Performance by score band
-- Financial impact analysis
-- Fairness assessment (by customer segment and account age)
-- Population Stability Index (PSI) history
-- Full sign-off checklist
+see [`reports/model_validation_report.md`](reports/model_validation_report.md) — covers SHAP feature importance, performance by score band, financial impact analysis, fairness assessment across customer segments and account age, PSI history, and a complete sign-off checklist.
 
 ---
 
-## Key Design Decisions
+## key design decisions
 
-**Time-based train/test split** — Prevents data leakage and simulates real deployment where models score future transactions. Never use random shuffle for time-series fraud data.
+**time-based train/test split** — random shuffle on time-series fraud data causes data leakage. in production you’re always scoring transactions you haven’t seen yet, so the test set needs to reflect that..
 
-**PR-AUC as optimization target** — ROC-AUC is misleading for highly imbalanced fraud data. PR-AUC directly measures precision-recall trade-off on the minority class.
+**PR-AUC as the optimization target** — ROC-AUC looks good on paper for imbalanced data but doesn’t tell you much about how well you’re actually catching fraud. PR-AUC is what matters when you’re building something that has to work operationally.
 
-**Dual-threshold strategy** — A single threshold conflates auto-decline (high confidence) with analyst review (medium confidence). Separating these reduces unnecessary customer friction for the highest-confidence cases.
+**dual-threshold strategy** — one threshold doesn’t cut it. high confidence scores get auto-declined, medium scores go to analyst review. this reduces friction for customers on the clear-cut cases and focuses analyst time where it actually matters.
 
-**Behavioral + device features** — Raw transaction features alone are insufficient for modern fraud. Behavioral biometrics and device intelligence (LexisNexis ThreatMetrix) are among the top SHAP contributors, validating the integration investment.
+**behavioral + device features** — transaction data alone isn’t enough for modern fraud. behavioral biometrics and device intelligence features (ThreatMetrix-style) ended up being some of the top SHAP contributors, which validates why teams invest in those integrations.
 
 ---
 
-## Technologies
+## techs
 
-- **Python** — pandas, scikit-learn, XGBoost, SHAP, Optuna, matplotlib, seaborn
+- **python** — pandas, scikit-learn, XGBoost, SHAP, Optuna, matplotlib, seaborn
 - **SQL** — Snowflake-compatible CTEs for feature extraction and KPI reporting
-- **Platforms referenced** — Actimize, LexisNexis Risk Solutions, LexisNexis ThreatMetrix, BioCatch
+- **platforms referenced** — Actimize, LexisNexis Risk Solutions, LexisNexis ThreatMetrix, BioCatch
 
 ---
 
-## Disclaimer
+## disclaimer
 
-All data in this repository is **synthetically generated**. No real customer data, account information, or proprietary bank data is included. Synthetic patterns are designed to reflect realistic fraud distributions for modeling demonstration purposes only.
+this is all fake data. **synthetically generated data** for all my corporate jargon speakers. patterns are designed to mimic real fraud patterns, though. 
