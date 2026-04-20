@@ -123,7 +123,7 @@ def simulate_transactions(accounts: pd.DataFrame) -> pd.DataFrame:
         # Fraud skews heavily toward night hours
         if is_fraud:
             hour = np.random.choice(range(24), p=[
-                0.08, 0.09, 0.08, 0.07, 0.06, 0.03,  # 0-5 AM
+                0.06, 0.08, 0.07, 0.06, 0.05, 0.02,  # 0-5 AM
                 0.02, 0.01, 0.01, 0.01, 0.01, 0.01,  # 6-11 AM
                 0.02, 0.02, 0.02, 0.02, 0.03, 0.04,  # noon-5 PM
                 0.06, 0.07, 0.08, 0.08, 0.07, 0.08   # 6 PM - 11 PM
